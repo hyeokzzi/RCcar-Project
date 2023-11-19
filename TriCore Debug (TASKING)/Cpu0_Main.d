@@ -114,3 +114,7 @@ c:/project3/autoever_project/BSW/IO/Tof.h :
 c:/project3/autoever_project/BSW/IO/GPIO.h :
 /Cpu0_Main.o :	c:/project3/autoever_project/BSW/IO/Ultrasonic.h
 c:/project3/autoever_project/BSW/IO/Ultrasonic.h :
+/Cpu0_Main.o :	c:/project3/autoever_project/BSW/IO/Bluetooth.h
+c:/project3/autoever_project/BSW/IO/Bluetooth.h :
+/Cpu0_Main.o :	c:/project3/autoever_project/BSW/Etc/my_stdio.h
+c:/project3/autoever_project/BSW/Etc/my_stdio.h :
