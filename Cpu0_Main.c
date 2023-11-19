@@ -1,12 +1,12 @@
 #include "main.h"
 #include "asclin.h"
-#include "Drivers/asclin.h"
 #include "gpt12.h"
 #include "Motor.h"
-#include "IO/ToF.h"
 #include "Tof.h"
 #include "GPIO.h"
 #include "Ultrasonic.h"
+#include "Bluetooth.h"
+#include "my_stdio.h"
 
 #define Switch1   &MODULE_P02,0
 #define LED_BLUE  &MODULE_P10,2
@@ -14,6 +14,57 @@
 #define LED_RED   &MODULE_P10,1
 IfxCpu_syncEvent g_cpuSyncEvent = 0;
 
+int distance, res, dir = 1, flag = 0;
+int sp[2] = {0, 0}; // B A
+
+void stop_motor ()
+{
+    sp[0] = sp[1] = 0;
+    stopChA();
+    stopChB();
+}
+void change_mode (char ch)
+{
+    // 직진
+    if (ch == 'w')
+    {
+        sp[0] = 40;
+        sp[1] = 40                                                                   ;
+        dir = 1;
+    }
+    // 좌회전
+    else if (ch == 'a')
+    {
+        sp[0] = 0;
+        sp[1] = 55;
+    }
+    // 우회전
+    else if (ch == 'd')
+    {
+        sp[0] = 55;
+        sp[1] = 0;
+    }
+    // 후진
+    else if (ch == 's')
+    {
+        sp[0] = 35;
+        sp[1] = 35;
+        dir = 0;
+    }
+    else if (ch == 'q')
+    {
+        sp[0] = 50;
+        sp[1] = 50;
+        dir = 1;
+    }
+    else if (ch == 'f')
+    {
+        sp[0] = 0;
+        sp[1] = 0;
+        stopChA();
+        stopChB();
+    }
+}
 int core0_main (void)
 {
     IfxCpu_enableInterrupts();
@@ -29,6 +80,8 @@ int core0_main (void)
     IfxCpu_waitEvent(&g_cpuSyncEvent, 1);
 
     /* Module Initialize */
+    Init_Mystdio();
+    Init_Bluetooth();
     _init_uart3();
     _init_uart1();
     Init_Ultrasonics();
@@ -37,100 +90,99 @@ int core0_main (void)
     Init_DCMotors();
     Init_Buzzer();
 
-    unsigned char ch, save= ' ';
+    unsigned char ch, save = ' ';
     // 움직임 코드 movChA(duty, 1);
     // 정지코드 stopChA();
-    int distance, res, dir = 1, flag = 0;;
-    int sp[2] = {0, 0}; // B A
     float Rdistance, Ldistance;
-    char buf[100];
+    int cnt = 0;
+    //char buf[100];
     //ReadLeftUltrasonic_Filt();
-    while(1){
-        // 키 입력 res = _poll_uart3(&ch);
-        // 거리 입력 getTofDistance();
+    setBeepCycle(0);
+    while (1)
+    {
+        // 기존 방식
+        //res = _poll_uart3(&ch);
         distance = getTofDistance();
-        res = _poll_uart3(&ch);
         Rdistance = ReadRearUltrasonic_Filt();
+        ch = getBluetoothByte_nonBlocked();
 
-        // 키 입력 받으면 왼쪽 오른쪽 속도 제어
-        if(res > 0){
-            if(save != ch) flag = 0;
-            // 직진
-            if(ch == 'w'){
-                sp[0] = 33;
-                sp[1] = 33;
-                dir = 1;
+        // 키 입력 시, 속도 제어
+        if (ch > 0)
+        {
+            if (ch >= 'a' && ch <= 'z')
+            {
+                if (save != ch)
+                    flag = 0;
+                save = ch;
             }
-            // 좌회전
-            else if(ch == 'a'){
-                sp[0] = 0;
-                sp[1] = 40;
-            }
-            // 우회전
-            else if(ch == 'd'){
-                sp[0] = 40;
-                sp[1] = 0;
-            }
-            // 후진
-            else if(ch == 's'){
-                sp[0] = 33;
-                sp[1] = 33;
-                dir = 0;
-            }
-            else if(ch == 'q'){
-                sp[0] = 50;
-                sp[1] = 50;
-                dir = 1;
-            }
-            else{
-                sp[0] = 0;
-                sp[1] = 0;
-            }
-            save = ch;
+            change_mode(ch);
         }
 
-        // 레이저 거리 이하 상황 - 긴급 정지
-        if(ch != 's' && distance > 0 && distance <= 180){
-            if(distance < 100 && (sp[0] > 0 || sp[1] > 0)){
-                sp[0] = 0;
-                sp[1] = 0;
+        // 레이저 거리에 따른 속도 변환 - ACC 구현
+        if (((save >= 'a' && save <= 'z') && save != 's') && (distance > 0 && distance <= 300))
+        {
+            // 70~220 => 20 ~ 40
+            if ((save == 'w' || save == 'q') && distance >= 180)
+            {
+                int speed = ((distance - 180) * (40 - 15)) / (300 - 180) + 15;
+                if (sp[0] != 0)
+                    sp[0] = speed;
+                if (sp[1] != 0)
+                    sp[1] = speed;
+            }
+            else if((save == 'w' || save =='q') && distance < 150)
+            {
+                stop_motor();
             }
         }
 
-        if(ch == 's' && Rdistance < 30.0f){
-            if(Rdistance > 20.0f){
-                setBeepCycle(150);
-                sp[0] = 25;
-                sp[1] = 25;
+        // 후진 경고음 및 감속
+        if (save == 's' && Rdistance < 30.0f)
+        {
+            if (Rdistance >= 10.0f)
+            {
+                int speed = (((int) Rdistance - 10) * (30 - 10)) / (35 - 10) + 20;
+                int sound = (((int) Rdistance - 10) * (150 - 10)) / (35 - 10) + 20;
+                if (sp[0] != 0)
+                    sp[0] = speed;
+                if (sp[1] != 0)
+                    sp[1] = speed;
+                setBeepCycle(sound);
             }
-            else if(Rdistance > 10.0f){
-                setBeepCycle(70);
-            }
-            else{
+            else
+            {
                 setBeepCycle(1);
-                sp[0] = 0;
-                sp[1] = 0;
-
+                stop_motor();
             }
         }
-        else{
+        else
+        {
             setBeepCycle(0);
         }
 
-        if(flag == 0 && (sp[0] > 0 || sp[1] > 0)){
+        if (flag == 0 && (sp[0] > 0 || sp[1] > 0))
+        {
             movChA_PWM(80, dir);
             movChB_PWM(80, dir);
             delay_ms(10);
             flag = 1;
         }
+        if (sp[0] == 0 && sp[1] == 0)
+        {
+            stopChA();
+            stopChB();
+        }
+        else
+        {
+            movChA_PWM(sp[1], dir);
+            movChB_PWM(sp[0], dir);
+        }
 
-        movChA_PWM(sp[1], dir);
-        movChB_PWM(sp[0], dir);
-        my_printf("distance = %d, ch = %c B = %d, A = %d\n", distance, ch, sp[0], sp[1]);
-        my_printf("Udistance = %f Ldistance = %f \n", Rdistance, Ldistance);
+        bl_printf("distance = %d, save = %c B = %d, A = %d\n", distance, save, sp[0], sp[1]);
+        bl_printf("Rdistance = %f Ldistance = %f \n", Rdistance, Ldistance);
         delay_ms(20);
+
     }
 
     return 0;
 }
-

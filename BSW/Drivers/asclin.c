@@ -324,7 +324,7 @@ int _nonBlock_poll_uart0(unsigned char *chr)
     Ifx_SizeT count = 1;
     int res = 0;
 
-    res = IfxAsclin_Asc_read(&g_ascHandle0, &ch, &count, TIME_NULL);
+    res = IfxAsclin_Asc_read(&g_ascHandle0, &ch, &count, 10);
     if (res == TRUE)
     {
         *chr = ch;
