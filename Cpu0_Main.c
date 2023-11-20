@@ -29,7 +29,7 @@ void change_mode (char ch)
     if (ch == 'w')
     {
         sp[0] = 40;
-        sp[1] = 40                                                                   ;
+        sp[1] = 40;
         dir = 1;
     }
     // 좌회전
@@ -47,14 +47,14 @@ void change_mode (char ch)
     // 후진
     else if (ch == 's')
     {
-        sp[0] = 35;
-        sp[1] = 35;
+        sp[0] = 30;
+        sp[1] = 30;
         dir = 0;
     }
     else if (ch == 'q')
     {
-        sp[0] = 50;
-        sp[1] = 50;
+        sp[0] = 70;
+        sp[1] = 70;
         dir = 1;
     }
     else if (ch == 'f')
@@ -94,72 +94,161 @@ int core0_main (void)
     // 움직임 코드 movChA(duty, 1);
     // 정지코드 stopChA();
     float Rdistance, Ldistance;
-    int cnt = 0;
+    int cnt = 0, stop_flag = 0, save_cnt = 0;;
     //char buf[100];
     //ReadLeftUltrasonic_Filt();
     setBeepCycle(0);
+
+    int rotate_standard = 10;
+
     while (1)
     {
         // 기존 방식
-        //res = _poll_uart3(&ch);
         distance = getTofDistance();
         Rdistance = ReadRearUltrasonic_Filt();
         ch = getBluetoothByte_nonBlocked();
+        Ldistance = ReadLeftUltrasonic_Filt();
 
         // 키 입력 시, 속도 제어
-        if (ch > 0)
+        if (ch >= 'a' && ch <= 'z')
         {
-            if (ch >= 'a' && ch <= 'z')
-            {
-                if (save != ch)
-                    flag = 0;
-                save = ch;
-            }
-            change_mode(ch);
+            if (save != ch)
+                flag = 0;
+            save = ch;
         }
+        change_mode(ch);
+
+        // 자율주차 모드
+        if(stop_flag == 0 && save == 'p'){
+            sp[0] = sp[1] = 30;
+            dir = 1;
+            if(Ldistance > 40.0f) cnt++;
+            else{
+                // 주차 가능 여부 확인
+                // 1. 가능
+                if(cnt > rotate_standard){
+                    bl_printf("find parking space \n");
+
+                    // 주차 공간 중앙으로 이동하기 위한 변수값 저장
+                    save_cnt = cnt;
+                    stop_flag = 1;
+                    stop_motor();
+                    delay_ms(1000);
+
+                    // 후진 진행 부스터
+                    movChA_PWM(80, 0);
+                    movChB_PWM(80, 0);
+                    delay_ms(70);
+                    sp[0] = sp[1] = 25;
+                    dir = 0;
+                }
+                else cnt = 0;
+            }
+        }
+        else if(stop_flag == 1 && save == 'p'){
+
+            // 주차 공간 중앙으로 이동하기 위해 cnt값의 절반까지 이동
+            if(Ldistance > 40.0f){
+                sp[0] = sp[1] = 25;
+                cnt--;
+            }
+            // cnt 값의 절반 까지 이동 완료
+            if(cnt == save_cnt / 2 + 1){
+                // 임시 정지
+                stop_motor();
+                delay_ms(2000);
+
+                // 90도 회전
+                bl_printf("starting rotate\n");
+                movChA_PWM(80, 0);
+                movChB_PWM(80, 1);
+                delay_ms(320);
+                stop_motor();
+                delay_ms(1000);
+
+                // 후진을 위한 부스터 진행
+                bl_printf("starting parking\n");
+                movChA_PWM(80, 0);
+                movChB_PWM(80, 0);
+                delay_ms(30);
+
+                // 속도값
+                dir = 0;
+                sp[0] = sp[1] = 25;
+
+                // 자율주차 모드 변수 초기화
+                stop_flag = 0;
+                cnt = 0;
+
+                // 후진 충돌 방지 모드 실행
+                save = 's';
+            }
+        }
+        bl_printf("current cnt = %d, mode = %d\n", cnt, stop_flag);
+
 
         // 레이저 거리에 따른 속도 변환 - ACC 구현
         if (((save >= 'a' && save <= 'z') && save != 's') && (distance > 0 && distance <= 300))
         {
-            // 70~220 => 20 ~ 40
-            if ((save == 'w' || save == 'q') && distance >= 180)
+            // 거리에 따른 속도 변화 ( w - 주행 / q - 터보 주행 )
+            if (save == 'w')
             {
-                int speed = ((distance - 180) * (40 - 15)) / (300 - 180) + 15;
-                if (sp[0] != 0)
-                    sp[0] = speed;
-                if (sp[1] != 0)
-                    sp[1] = speed;
+                if (distance >= 120)
+                {
+                    int speed = ((distance - 120) * (40 - 15)) / (300 - 120) + 15;
+                    if (sp[0] != 0)
+                        sp[0] = speed;
+                    if (sp[1] != 0)
+                        sp[1] = speed;
+                }
+                else
+                {
+                    movChA_PWM(90, 0);
+                    movChB_PWM(90, 0);
+                    delay_ms(30);
+                    save = ' '; // 최초 1회만 역방향 걸리도록 쓰레기값 넣음
+                    stop_motor();
+                }
             }
-            else if((save == 'w' || save =='q') && distance < 150)
+            else if (save == 'q')
             {
-                stop_motor();
+                if (distance >= 230)
+                {
+                    int speed = ((distance - 230) * (70 - 5)) / (300 - 230) + 5;
+                    sp[0] = sp[1] = speed;
+                }
+                else
+                {
+                    movChA_PWM(100, 0);
+                    movChB_PWM(100, 0);
+                    delay_ms(60);
+                    save = ' ';
+                    stop_motor();
+                }
             }
         }
 
         // 후진 경고음 및 감속
-        if (save == 's' && Rdistance < 30.0f)
+        if ((save == 's' || dir == 0) && Rdistance < 40.0f)
         {
-            if (Rdistance >= 10.0f)
+            int dist = (int) Rdistance;
+            if (Rdistance >= 5.0f)
             {
-                int speed = (((int) Rdistance - 10) * (30 - 10)) / (35 - 10) + 20;
-                int sound = (((int) Rdistance - 10) * (150 - 10)) / (35 - 10) + 20;
-                if (sp[0] != 0)
-                    sp[0] = speed;
-                if (sp[1] != 0)
-                    sp[1] = speed;
-                setBeepCycle(sound);
+                int speed = ((dist - 5) * (30 - 25)) / (40 - 5) + 25;
+                if (sp[0] != 0) sp[0] = speed;
+                if (sp[1] != 0) sp[1] = speed;
             }
-            else
-            {
-                setBeepCycle(1);
-                stop_motor();
-            }
-        }
-        else
-        {
-            setBeepCycle(0);
-        }
+            else stop_motor();
 
+            // 거리에 따른 부저 설정
+            if (dist > 30) setBeepCycle(150);
+            else if (dist > 20) setBeepCycle(70);
+            else if (dist > 10) setBeepCycle(30);
+            else setBeepCycle(1);
+        }
+        else setBeepCycle(0);
+
+        // 키 입력 변화 시, 1회 모터 가속
         if (flag == 0 && (sp[0] > 0 || sp[1] > 0))
         {
             movChA_PWM(80, dir);
@@ -167,10 +256,11 @@ int core0_main (void)
             delay_ms(10);
             flag = 1;
         }
+
+        // 완전 정지
         if (sp[0] == 0 && sp[1] == 0)
         {
-            stopChA();
-            stopChB();
+            stop_motor();
         }
         else
         {
@@ -178,8 +268,8 @@ int core0_main (void)
             movChB_PWM(sp[0], dir);
         }
 
-        bl_printf("distance = %d, save = %c B = %d, A = %d\n", distance, save, sp[0], sp[1]);
-        bl_printf("Rdistance = %f Ldistance = %f \n", Rdistance, Ldistance);
+        //bl_printf("distance = %d, save = %c B = %d, A = %d\n", distance, save, sp[0], sp[1]);
+        //bl_printf("Rdistance = %f Ldistance = %f \n", Rdistance, Ldistance);
         delay_ms(20);
 
     }
